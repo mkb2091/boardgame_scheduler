@@ -20,7 +20,7 @@ fn main() {
                 stack.push(res.unwrap());
             }
             min_depth = min_depth.min(stack.len());
-            max_depth = min_depth.max(stack.len());
+            max_depth = max_depth.max(stack.len());
         }
         counter += n;
 		let last = stack[min_depth - 1];
