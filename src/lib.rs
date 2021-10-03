@@ -1,14 +1,17 @@
+mod to_explore;
+use to_explore::ToExplore;
+
+use serde::{Deserialize, Serialize};
+
 const ROUND_COUNT: usize = 6;
 const TABLE_COUNT: usize = 6;
 const PLAYERS_PER_TABLE: usize = 4;
 const TO_EXPLORE_SHIFT: usize = 3;
 const PLAYER_COUNT: usize = TABLE_COUNT * PLAYERS_PER_TABLE;
 
-use serde::{Deserialize, Serialize};
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct State {
-    tables_to_explore: u64,
+    tables_to_explore: ToExplore,
     players_played_count: u8,
     empty_table_count: u8,
     players_played_with: [u32; PLAYER_COUNT],
@@ -20,15 +23,9 @@ pub struct State {
 
 impl State {
     pub fn new() -> Self {
-        let mut tables_to_explore = 0;
-        for round in 0..ROUND_COUNT {
-            for table in 0..TABLE_COUNT {
-                tables_to_explore |= 1 << ((round << TO_EXPLORE_SHIFT) + table);
-            }
-        }
         let potential_on_table = [[(1 << 24) - 1; TABLE_COUNT]; ROUND_COUNT];
         let mut state = Self {
-            tables_to_explore,
+            tables_to_explore: ToExplore::filled(),
             players_played_count: 0,
             empty_table_count: (ROUND_COUNT * TABLE_COUNT) as u8,
             players_played_with: [0; PLAYER_COUNT],
@@ -88,10 +85,10 @@ impl State {
         // Add other players on table to current players played with list
         self.players_played_with[player] |= other_players;
         while other_players != 0 {
-            let trailing_zeros = other_players.trailing_zeros() as usize;
-            other_players &= !(1 << trailing_zeros);
+            let other_player = other_players.trailing_zeros() as usize;
+            other_players &= !(1 << other_player);
             // Add current player to each other players played with list
-            self.players_played_with[trailing_zeros] |= player_mask;
+            self.players_played_with[other_player] |= player_mask;
         }
 
         debug_assert_eq!(self.potential_on_table[round][table] & player_mask, 0);
@@ -180,19 +177,7 @@ impl State {
 
         let mut lowest: Option<(u32, usize, usize)> = None;
         let mut to_explore = self.tables_to_explore;
-        while to_explore != 0 {
-            let trailing_zeros = to_explore.trailing_zeros();
-            to_explore &= !(1 << trailing_zeros);
-            let round = trailing_zeros >> TO_EXPLORE_SHIFT;
-            let table = trailing_zeros - (round << TO_EXPLORE_SHIFT);
-            let round = round as usize;
-            let table = table as usize;
-            if table >= TABLE_COUNT || round >= ROUND_COUNT {
-                unreachable!();
-                self.tables_to_explore &= !(1 << trailing_zeros);
-                continue;
-            }
-
+        while let Some((round, table)) = to_explore.pop() {
             let fixed_player_count = self.played_on_table[round][table].count_ones();
             match fixed_player_count.cmp(&(PLAYERS_PER_TABLE as u32)) {
                 core::cmp::Ordering::Less => {
@@ -230,7 +215,7 @@ impl State {
                     }
                 }
                 core::cmp::Ordering::Equal => {
-                    self.tables_to_explore &= !(1 << trailing_zeros);
+                    self.tables_to_explore.remove(round, table);
                     self.empty_table_count = self.empty_table_count.checked_sub(1).unwrap();
                     self.game_full(round, table);
                     continue;
