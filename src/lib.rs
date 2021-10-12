@@ -49,6 +49,7 @@ impl State {
     }
 
     fn game_full(&mut self, round: usize, table: usize) {
+        self.empty_table_count = self.empty_table_count.checked_sub(1).unwrap();
         self.tables_to_explore.remove(round, table);
         self.potential_on_table[round][table] = self.played_on_table[round][table];
     }
@@ -216,7 +217,6 @@ impl State {
                     }
                 }
                 core::cmp::Ordering::Equal => {
-                    self.empty_table_count = self.empty_table_count.checked_sub(1).unwrap();
                     self.game_full(round, table);
                     continue;
                 }
