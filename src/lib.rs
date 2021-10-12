@@ -176,15 +176,15 @@ impl State {
     pub fn step(&mut self) -> Result<Option<Self>, ()> {
         //self.find_hidden_singles()?;
 
-        let mut lowest: Option<(u32, usize, usize)> = None;
+        let mut lowest: Option<(u8, usize, usize)> = None;
         let mut to_explore = self.tables_to_explore;
         while let Some((round, table)) = to_explore.pop() {
-            let fixed_player_count = self.played_on_table[round][table].count_ones();
-            match fixed_player_count.cmp(&(PLAYERS_PER_TABLE as u32)) {
+            let fixed_player_count = self.played_on_table[round][table].count_ones() as u8;
+            match fixed_player_count.cmp(&(PLAYERS_PER_TABLE as u8)) {
                 core::cmp::Ordering::Less => {
                     let potential = self.potential_on_table[round][table];
-                    let potential_count = potential.count_ones();
-                    match potential_count.cmp(&(PLAYERS_PER_TABLE as u32)) {
+                    let potential_count = potential.count_ones() as u8;
+                    match potential_count.cmp(&(PLAYERS_PER_TABLE as u8)) {
                         core::cmp::Ordering::Greater => {
                             lowest = Some(if let Some(lowest) = lowest {
                                 if potential_count < lowest.0 {
