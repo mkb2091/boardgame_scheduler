@@ -1,5 +1,6 @@
 use crate::*;
 use serde::{Deserialize, Serialize};
+use std::convert::TryInto;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ToExplore(u64);
@@ -10,43 +11,43 @@ impl ToExplore {
     }
     pub fn filled() -> Self {
         let mut to_explore = 0;
-        for round in 0..ROUND_COUNT {
-            for table in 0..TABLE_COUNT {
+        for round in ROUNDS {
+            for table in TABLES {
                 to_explore |= Self::encode(round, table);
             }
         }
         Self(to_explore)
     }
 
-    const fn encode(round: usize, table: usize) -> u64 {
-        1 << ((round << TO_EXPLORE_SHIFT) + table)
+    const fn encode(round: Round, table: Table) -> u64 {
+        1 << (((round as usize) << TO_EXPLORE_SHIFT) + table as usize)
     }
 
-    const fn decode(trailing_zeros: u32) -> (usize, usize) {
+    fn decode(trailing_zeros: u32) -> (Round, Table) {
         let round = trailing_zeros >> TO_EXPLORE_SHIFT;
         let table = trailing_zeros - (round << TO_EXPLORE_SHIFT);
-        let round = round as usize;
-        let table = table as usize;
+        let round = (round as usize).try_into().unwrap();
+        let table = (table as usize).try_into().unwrap();
         (round, table)
     }
 
-    pub fn pop(&mut self) -> Option<(usize, usize)> {
+    pub fn pop(&mut self) -> Option<(Round, Table)> {
         if self.0 == 0 {
             None
         } else {
             let trailing_zeros = self.0.trailing_zeros();
             self.0 &= !(1 << trailing_zeros);
             let (round, table) = Self::decode(trailing_zeros);
-            if table >= TABLE_COUNT || round >= ROUND_COUNT {
+            if table as usize >= TABLE_COUNT || round as usize >= ROUND_COUNT {
                 unreachable!();
             }
             Some((round, table))
         }
     }
-    pub fn remove(&mut self, round: usize, table: usize) {
+    pub fn remove(&mut self, round: Round, table: Table) {
         self.0 &= !Self::encode(round, table);
     }
-    pub fn add(&mut self, round: usize, table: usize) {
+    pub fn add(&mut self, round: Round, table: Table) {
         self.0 |= Self::encode(round, table);
     }
 }
