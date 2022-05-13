@@ -1,8 +1,8 @@
 mod to_explore;
-use to_explore::ToExplore;
-
+#[cfg(feature = "se")]
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
+use to_explore::ToExplore;
 
 const ROUND_COUNT: usize = 6;
 const TABLE_COUNT: usize = 6;
@@ -77,8 +77,8 @@ impl TryFrom<usize> for Round {
         }
     }
 }
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "se", derive(Serialize, Deserialise))]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct State {
     tables_to_explore: ToExplore,
     players_played_count: u8,
@@ -265,7 +265,7 @@ impl State {
         Ok(())
     }
 
-    pub fn step(&mut self) -> Result<Option<Self>, ()> {
+    pub fn step(&mut self, state2: &mut Self) -> Result<Option<()>, ()> {
         //self.find_hidden_singles()?;
 
         let mut lowest: Option<(u8, Round, Table)> = None;
@@ -328,10 +328,10 @@ impl State {
                 let player_bit = 1 << player;
                 temp &= !player_bit;
                 if self.can_play_with_players_in_game(round, table, player) {
-                    let mut state2 = *self;
+                    *state2 = *self;
                     self.potential_on_table[round as usize][table as usize] &= !player_bit;
                     state2.apply_player(round, table, player);
-                    return Ok(Some(state2));
+                    return Ok(Some(()));
                 } else {
                     self.potential_on_table[round as usize][table as usize] &= !player_bit;
                     continue 'played_iter;
