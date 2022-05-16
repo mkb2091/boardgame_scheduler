@@ -90,6 +90,12 @@ pub struct State {
     played_on_table_total: [u32; TABLE_COUNT],
 }
 
+impl std::fmt::Display for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.format_schedule(f)
+    }
+}
+
 impl State {
     pub fn new() -> Self {
         let potential_on_table = [[(1 << 24) - 1; TABLE_COUNT]; ROUND_COUNT];

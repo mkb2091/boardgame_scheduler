@@ -6,7 +6,6 @@ fn main() {
     let start = std::time::Instant::now();
     let mut n = 1000;
     let mut counter = 0;
-
     loop {
         let mut min_depth = stack.len();
         let mut max_depth = stack.len();
@@ -38,13 +37,12 @@ fn main() {
         counter += n;
         let last = &stack[min_depth - 1];
         let last = &stack.last().unwrap();
-        let mut pretty = String::new();
-        last.format_schedule(&mut pretty);
-        println!("\n{:?}\n{}\n", last, pretty);
+        println!("\n{:?}\n{}\n", last, last);
         println!(
-            "Rate: {}, Stack size: {}, min_depth: {}, max_depth: {}, max_get_players_played_count: {}",
+            "Rate: {}, Stack size: {}, allocations: {}, min_depth: {}, max_depth: {}, max_get_players_played_count: {}",
             counter as f32 / start.elapsed().as_secs_f32().max(0.1),
             stack.len(),
+            stack.len() + freelist.len(),
             min_depth,
 			max_depth,
             max_get_players_played_count,
