@@ -1,6 +1,6 @@
 fn main() {
-    let mut stack = vec![boardgame_scheduler::State::new()];
-    let mut index = 0;
+    let mut freelist = Vec::<Box<boardgame_scheduler::State>>::new();
+    let mut stack = vec![Box::new(boardgame_scheduler::State::new())];
 
     let mut max_get_players_played_count = 0;
     let start = std::time::Instant::now();
@@ -8,35 +8,36 @@ fn main() {
     let mut counter = 0;
 
     loop {
-        let mut min_depth = index + 1;
-        let mut max_depth = index + 1;
+        let mut min_depth = stack.len();
+        let mut max_depth = stack.len();
         let mut loop_start = std::time::Instant::now();
         for _ in 0..n {
-            while stack.len() < index + 2 {
-                stack.push(boardgame_scheduler::State::new());
-            }
+            let mut state = stack.pop().unwrap();
+            let mut state2 = freelist
+                .pop()
+                .unwrap_or_else(|| Box::new(boardgame_scheduler::State::new()));
 
-            let (_, data) = stack.split_at_mut(index);
-            let (state, data) = data.split_first_mut().unwrap();
-            let state2 = data.first_mut().unwrap();
-            if let Ok(res) = state.step(state2) {
+            if let Ok(res) = state.step(&mut state2) {
                 let played = state.get_players_played_count();
                 if played > max_get_players_played_count {
                     max_get_players_played_count = played;
                 }
+
                 let _ = res.unwrap();
-                index += 1;
+                stack.push(state);
+                stack.push(state2);
             } else {
-                index = index.checked_sub(1).unwrap();
+                freelist.push(state);
+                freelist.push(state2);
             }
 
-            min_depth = min_depth.min(index + 1);
-            max_depth = max_depth.max(index + 1);
+            min_depth = min_depth.min(stack.len());
+            max_depth = max_depth.max(stack.len());
         }
 
         counter += n;
-        let last = stack[min_depth - 1];
-        let last = stack[index];
+        let last = &stack[min_depth - 1];
+        let last = &stack.last().unwrap();
         let mut pretty = String::new();
         last.format_schedule(&mut pretty);
         println!("\n{:?}\n{}\n", last, pretty);
