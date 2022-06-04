@@ -1,4 +1,4 @@
-fn main() {
+fn step() {
     let mut freelist = Vec::<Box<boardgame_scheduler::State>>::new();
     let mut stack = vec![Box::new(boardgame_scheduler::State::new())];
 
@@ -49,4 +49,69 @@ fn main() {
         );
         n = (((n as f64) / loop_start.elapsed().as_secs_f64().max(0.1)) as u64).max(1000) / 2;
     }
+}
+
+fn bstep() {
+    let mut freelist = Vec::<Box<boardgame_scheduler::State>>::new();
+    let mut stack = vec![vec![Box::new(boardgame_scheduler::State::new())]];
+
+    let start = std::time::Instant::now();
+    let mut n = 1000;
+    let mut counter = 0;
+    let mut i = 0;
+    let mut loop_start = std::time::Instant::now();
+    let mut allocations = 1;
+    while let Some(mut states) = stack.pop() {
+        let mut state = states.pop();
+        if !states.is_empty() {
+            stack.push(states);
+        }
+
+        if let Some(mut state) = state {
+            let mut allocator = || {
+                freelist.pop().unwrap_or_else(|| {
+                    allocations += 1;
+                    Box::new(boardgame_scheduler::State::new())
+                })
+            };
+            let mut callback = |state: Box<boardgame_scheduler::State>| {
+                let available_count = state.get_available_count() as usize;
+                let played_count = state.get_players_played_count() as usize;
+                let score = available_count - played_count * 2;
+                while stack.len() <= score {
+                    stack.push(Vec::new());
+                }
+
+                stack[score].push(state);
+                //stack.sort_unstable_by_key(|s| s.get_available_count());
+            };
+            state.bstep(&mut allocator, &mut callback);
+            //println!("Allocatins: {}", allocations);
+            n = 10000;
+
+            i += 1;
+            if i > n {
+                counter += i;
+                println!("\n{:?}\n{}\n", state, state);
+
+                println!(
+                    "Rate: {}, allocations: {}, current available_count: {}",
+                    counter as f32 / start.elapsed().as_secs_f32().max(0.1),
+                    allocations,
+                    state.get_available_count()
+                );
+
+                n = (((n as f64) / loop_start.elapsed().as_secs_f64().max(0.1)) as u64).max(1000)
+                    / 2;
+                loop_start = std::time::Instant::now();
+                i = 0;
+            }
+
+            freelist.push(state);
+        }
+    }
+}
+
+fn main() {
+    bstep()
 }

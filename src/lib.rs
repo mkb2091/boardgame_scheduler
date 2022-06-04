@@ -77,6 +77,7 @@ impl TryFrom<usize> for Round {
         }
     }
 }
+
 #[cfg_attr(feature = "se", derive(Serialize, Deserialise))]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct State {
@@ -198,6 +199,16 @@ impl State {
             self.played_on_table[round as usize][table as usize].count_ones()
                 <= PLAYERS_PER_TABLE as u32
         );
+    }
+
+    pub fn get_available_count(&self) -> u32 {
+        let mut total = 0;
+        for round in ROUNDS {
+            for table in TABLES {
+                total += self.potential_on_table[round as usize][table as usize].count_ones();
+            }
+        }
+        total
     }
 
     pub fn get_players_played_count(&self) -> u8 {
@@ -346,6 +357,81 @@ impl State {
             return Err(());
         }
         Ok(None)
+    }
+
+    pub fn bstep<A, B, C>(&mut self, allocator: &mut A, callback: &mut C)
+    where
+        A: FnMut() -> B,
+        B: AsMut<Self>,
+        C: FnMut(B),
+    {
+        if self.find_hidden_singles().is_err() {
+            return;
+        }
+        let mut to_explore = self.tables_to_explore;
+        if let Some((round, table)) = to_explore.pop() {
+            let fixed_player_count =
+                self.played_on_table[round as usize][table as usize].count_ones() as u8;
+            match fixed_player_count.cmp(&(PLAYERS_PER_TABLE as u8)) {
+                core::cmp::Ordering::Less => {
+                    let potential = self.potential_on_table[round as usize][table as usize];
+                    let potential_count = potential.count_ones() as u8;
+                    match potential_count.cmp(&(PLAYERS_PER_TABLE as u8)) {
+                        core::cmp::Ordering::Greater => {
+                            // Find players
+
+                            let mut to_add =
+                                potential & !self.played_on_table[round as usize][table as usize];
+                            while to_add != 0 {
+                                let player = to_add.trailing_zeros() as usize;
+                                to_add &= !(1 << player);
+                                if self.can_play_with_players_in_game(round, table, player) {
+                                    let mut scrap = *self;
+                                    let mut new = allocator();
+                                    let ptr: &mut Self = new.as_mut();
+                                    *ptr = *self;
+                                    // Make it remove all lower numbers so that lowest player is always added first
+                                    // Ensures that all generated solutions are unique
+                                    ptr.potential_on_table[round as usize][table as usize] &=
+                                        !((1 << player) - 1);
+                                    ptr.apply_player(round, table, player);
+                                    callback(new);
+                                } else {
+                                    unreachable!();
+                                }
+                            }
+                        }
+                        core::cmp::Ordering::Equal => {
+                            let mut potential =
+                                potential & !self.played_on_table[round as usize][table as usize];
+                            while potential != 0 {
+                                let player = potential.trailing_zeros() as usize;
+                                potential &= !(1 << player);
+                                if self.can_play_with_players_in_game(round, table, player) {
+                                    self.apply_player(round, table, player);
+                                } else {
+                                    // Cannot fill game
+                                    return;
+                                }
+                            }
+                        }
+                        core::cmp::Ordering::Less => {
+                            // Not enough potential to fill game
+                            return;
+                        }
+                    }
+                }
+                core::cmp::Ordering::Greater => {
+                    unreachable!()
+                }
+                core::cmp::Ordering::Equal => {
+                    self.game_full(round, table);
+                }
+            }
+        } else {
+            // Maybe Done, Maybe error
+            unreachable!()
+        }
     }
 
     pub fn format_schedule<W: core::fmt::Write>(&self, output: &mut W) -> core::fmt::Result {
