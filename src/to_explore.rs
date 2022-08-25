@@ -1,9 +1,9 @@
 use crate::*;
-#[cfg(feature = "se")]
+
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
-#[cfg_attr(feature = "se", derive(Serialize, Deserialize))]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ToExplore(u64);
 
 impl ToExplore {

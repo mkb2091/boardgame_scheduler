@@ -1,5 +1,5 @@
 mod to_explore;
-#[cfg(feature = "se")]
+
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use to_explore::ToExplore;
@@ -78,8 +78,7 @@ impl TryFrom<usize> for Round {
     }
 }
 
-#[cfg_attr(feature = "se", derive(Serialize, Deserialise))]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct State {
     tables_to_explore: ToExplore,
     players_played_count: u8,
@@ -117,6 +116,10 @@ impl State {
                 player += 1;
             }
         }
+        //state.apply_player(Round::One, Table::Zero, 4);
+        //state.apply_player(Round::One, Table::Zero, 8);
+        //state.apply_player(Round::One, Table::Zero, 12);
+        //state.apply_player(Round::One, Table::Zero, 16);
         state
     }
 
@@ -359,15 +362,10 @@ impl State {
         Ok(None)
     }
 
-    pub fn bstep<A, B, C>(&mut self, allocator: &mut A, callback: &mut C)
+    pub fn bstep<C>(&mut self, callback: &mut C)
     where
-        A: FnMut() -> B,
-        B: AsMut<Self>,
-        C: FnMut(B),
+        C: FnMut(&Self),
     {
-        if self.find_hidden_singles().is_err() {
-            return;
-        }
         let mut to_explore = self.tables_to_explore;
         if let Some((round, table)) = to_explore.pop() {
             let fixed_player_count =
@@ -386,16 +384,14 @@ impl State {
                                 let player = to_add.trailing_zeros() as usize;
                                 to_add &= !(1 << player);
                                 if self.can_play_with_players_in_game(round, table, player) {
-                                    let mut scrap = *self;
-                                    let mut new = allocator();
-                                    let ptr: &mut Self = new.as_mut();
-                                    *ptr = *self;
+                                    let mut new = *self;
+
                                     // Make it remove all lower numbers so that lowest player is always added first
                                     // Ensures that all generated solutions are unique
-                                    ptr.potential_on_table[round as usize][table as usize] &=
+                                    new.potential_on_table[round as usize][table as usize] &=
                                         !((1 << player) - 1);
-                                    ptr.apply_player(round, table, player);
-                                    callback(new);
+                                    new.apply_player(round, table, player);
+                                    callback(&new);
                                 } else {
                                     unreachable!();
                                 }
@@ -414,6 +410,8 @@ impl State {
                                     return;
                                 }
                             }
+
+                            callback(self);
                         }
                         core::cmp::Ordering::Less => {
                             // Not enough potential to fill game
@@ -426,6 +424,7 @@ impl State {
                 }
                 core::cmp::Ordering::Equal => {
                     self.game_full(round, table);
+                    callback(self);
                 }
             }
         } else {

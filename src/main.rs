@@ -1,3 +1,6 @@
+use bincode::Options;
+use std::io::Read;
+use std::io::Write;
 fn step() {
     let mut freelist = Vec::<Box<boardgame_scheduler::State>>::new();
     let mut stack = vec![Box::new(boardgame_scheduler::State::new())];
@@ -51,54 +54,102 @@ fn step() {
     }
 }
 
-fn bstep() {
-    let mut freelist = Vec::<Box<boardgame_scheduler::State>>::new();
-    let mut stack = vec![vec![Box::new(boardgame_scheduler::State::new())]];
+fn bstep() -> Result<(), Box<dyn std::error::Error>> {
+    let max_cache = 100_000;
+    let cache_diff_limit = 10;
 
+    let state = boardgame_scheduler::State::new();
+    let available_count = state.get_available_count() as usize;
+
+    let bincode_ops = bincode::DefaultOptions::new().with_fixint_encoding();
+    let serialized_size = bincode_ops.serialized_size(&state)?;
+
+    let mut files = Vec::new();
+    for i in 0..available_count + 1 {
+        let file = std::fs::File::create(format!("tmp{}.txt", i))?;
+        let buf = std::io::BufWriter::new(file);
+        files.push((vec![], buf));
+    }
+    files[available_count].0.push(state);
     let start = std::time::Instant::now();
-    let mut n = 1000;
+    let mut n = 100000;
     let mut counter = 0;
     let mut i = 0;
     let mut loop_start = std::time::Instant::now();
-    let mut allocations = 1;
-    while let Some(mut states) = stack.pop() {
-        let mut state = states.pop();
-        if !states.is_empty() {
-            stack.push(states);
-        }
 
-        if let Some(mut state) = state {
-            let mut allocator = || {
-                freelist.pop().unwrap_or_else(|| {
-                    allocations += 1;
-                    Box::new(boardgame_scheduler::State::new())
-                })
+    while let Some((mut stack, mut write_buf)) = files.pop() {
+        let current_count = files.len();
+        println!("Current_count: {}", current_count);
+        write_buf.flush()?;
+        let mut file_buf =
+            if let Ok(file) = std::fs::File::open(format!("tmp{}.txt", current_count)) {
+                let buf_read = std::io::BufReader::new(file);
+                Some(buf_read)
+            } else {
+                None
             };
-            let mut callback = |state: Box<boardgame_scheduler::State>| {
-                let available_count = state.get_available_count() as usize;
-                let played_count = state.get_players_played_count() as usize;
-                let score = available_count - played_count * 2;
-                while stack.len() <= score {
-                    stack.push(Vec::new());
+
+        let mut buf = vec![0; serialized_size as usize];
+
+        let mut max_players_placed = 0;
+        let mut best = None;
+
+        'inner: loop {
+            let mut state = if let Some(state) = stack.pop() {
+                state
+            } else if file_buf
+                .as_mut()
+                .and_then(|file| file.read_exact(&mut buf).ok())
+                .is_some()
+            {
+                match bincode_ops.deserialize(&buf) {
+                    Ok(state) => state,
+                    Err(err) => {
+                        println!("Error decoding: {:?}", err);
+                        break 'inner;
+                    }
                 }
-
-                stack[score].push(state);
-                //stack.sort_unstable_by_key(|s| s.get_available_count());
+            } else {
+                let _ = std::fs::remove_file(format!("tmp{}.txt", current_count));
+                break 'inner;
             };
-            state.bstep(&mut allocator, &mut callback);
+            counter += 1;
+            let players_placed = state.get_players_played_count();
+            if players_placed > max_players_placed {
+                max_players_placed = players_placed;
+                best = Some(state);
+            }
+
+            let mut callback = |state: &boardgame_scheduler::State| {
+                //if state.find_hidden_singles().is_err() {
+                //    return;
+                //}
+                let available_count = state.get_available_count() as usize;
+                assert!(available_count <= current_count);
+                if available_count == current_count {
+                    stack.push(*state);
+                } else {
+                    let target = &mut files[available_count];
+                    if (available_count + cache_diff_limit < current_count)
+                        || target.0.len() > max_cache
+                    {
+                        bincode_ops.serialize_into(&mut target.1, state).unwrap();
+                    } else {
+                        target.0.push(*state);
+                    }
+                }
+                //let score = 24 * 6 * 6 - score;
+            };
+            state.bstep(&mut callback);
+
             //println!("Allocatins: {}", allocations);
-            n = 10000;
 
             i += 1;
             if i > n {
-                counter += i;
-                println!("\n{:?}\n{}\n", state, state);
-
                 println!(
-                    "Rate: {}, allocations: {}, current available_count: {}",
+                    "Rate: {}, current available_count: {}",
                     counter as f32 / start.elapsed().as_secs_f32().max(0.1),
-                    allocations,
-                    state.get_available_count()
+                    current_count
                 );
 
                 n = (((n as f64) / loop_start.elapsed().as_secs_f64().max(0.1)) as u64).max(1000)
@@ -106,12 +157,15 @@ fn bstep() {
                 loop_start = std::time::Instant::now();
                 i = 0;
             }
-
-            freelist.push(state);
+        }
+        if let Some(best) = best {
+            println!("Max players placed: {}", max_players_placed);
+            println!("State: {:}", best);
         }
     }
+    Ok(())
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     bstep()
 }
