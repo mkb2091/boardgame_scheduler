@@ -3,6 +3,8 @@ use crate::*;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 
+const TO_EXPLORE_SHIFT: usize = 3;
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ToExplore(u64);
 

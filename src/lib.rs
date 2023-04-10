@@ -7,8 +7,8 @@ use to_explore::ToExplore;
 const ROUND_COUNT: usize = 6;
 const TABLE_COUNT: usize = 6;
 const PLAYERS_PER_TABLE: usize = 4;
-const TO_EXPLORE_SHIFT: usize = 3;
 const PLAYER_COUNT: usize = TABLE_COUNT * PLAYERS_PER_TABLE;
+const PLAYER_MASK: u32 = (1 << PLAYER_COUNT) - 1;
 
 const TABLES: [Table; 6] = [
     Table::Zero,
@@ -28,7 +28,7 @@ const ROUNDS: [Round; 6] = [
     Round::Five,
 ];
 
-#[derive(Copy, Clone, PartialOrd, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialOrd, PartialEq)]
 pub enum Table {
     Zero = 0,
     One = 1,
@@ -53,8 +53,8 @@ impl TryFrom<usize> for Table {
     }
 }
 
-#[derive(Copy, Clone, PartialOrd, PartialEq)]
-enum Round {
+#[derive(Copy, Clone, Debug, PartialOrd, PartialEq)]
+pub enum Round {
     Zero = 0,
     One = 1,
     Two = 2,
@@ -78,6 +78,222 @@ impl TryFrom<usize> for Round {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct DF2 {
+    players_placed: u16,
+    round: Round,
+    table: Table,
+    player_number: usize,
+    played_in_round: [u32; ROUND_COUNT],
+    played_on_table_total: [u32; TABLE_COUNT],
+    schedule: [[[u8; 4]; TABLE_COUNT]; ROUND_COUNT],
+    removed: [[u32; TABLE_COUNT]; ROUND_COUNT],
+    players_played_with: [u32; 32],
+}
+
+impl DF2 {
+    pub fn new() -> Self {
+        let mut new = Self {
+            players_placed: 0,
+            round: Round::Zero,
+            table: Table::Zero,
+            player_number: 0,
+            played_in_round: [0; ROUND_COUNT],
+            played_on_table_total: [0; ROUND_COUNT],
+            schedule: [[[PLAYER_COUNT as u8; 4]; ROUND_COUNT]; TABLE_COUNT],
+            removed: [[0; TABLE_COUNT]; ROUND_COUNT],
+            players_played_with: [0; 32],
+        };
+        for player in 0..PLAYER_COUNT as u8 {
+            new.apply_player(player);
+            new.increment().unwrap();
+        }
+        new.decrement().unwrap();
+
+        new
+    }
+    pub fn from_slice(players: &[u8]) -> Result<Self, ()> {
+        let mut df = Self::new();
+        for player in players.iter() {
+            df.increment()?;
+            if df.get_mask(df.round, df.table) & (1 << player) == 0 {
+                return Err(());
+            }
+            df.apply_player(*player);
+        }
+
+        Ok(df)
+    }
+    fn toggle_player(&mut self, player: u8) {
+        assert!(player < PLAYER_COUNT as u8);
+        let round = self.round;
+        let table = self.table;
+        let player_mask: u32 = 1 << player;
+        self.played_in_round[round as usize] ^= player_mask;
+        self.played_on_table_total[table as usize] ^= player_mask;
+        let players_in_round = self.schedule[round as usize][table as usize];
+        self.players_played_with[players_in_round[0] as usize & 31] ^= player_mask;
+        self.players_played_with[players_in_round[1] as usize & 31] ^= player_mask;
+        self.players_played_with[players_in_round[2] as usize & 31] ^= player_mask;
+        self.players_played_with[players_in_round[3] as usize & 31] ^= player_mask;
+        self.players_played_with[PLAYER_COUNT] = 0;
+    }
+    fn apply_player(&mut self, player: u8) {
+        assert!(player < PLAYER_COUNT as u8);
+        debug_assert_ne!(self.get_mask(self.round, self.table) & (1 << player), 0);
+        self.removed[self.round as usize][self.table as usize] |= 1 << player; // Only change that is not removed by remove_player
+        self.schedule[self.round as usize][self.table as usize][self.player_number as usize] = player as u8;
+        log::trace!("placing player {} into {:?}", player, self.schedule[self.round as usize][self.table as usize]);
+        self.toggle_player(player);
+    }
+    fn last_player(&self) -> u8 {
+        self.schedule[self.round as usize][self.table as usize][self.player_number]
+    }
+    fn remove_last_player(&mut self) {
+        let player = self.last_player();
+        assert!(player < PLAYER_COUNT as u8);
+        self.schedule[self.round as usize][self.table as usize][self.player_number] =
+            PLAYER_COUNT as u8;
+        self.toggle_player(player);
+    }
+    const fn get_mask(&self, round: Round, table: Table) -> u32 {
+        /* TODO
+        - First person of each round must be greater than last, otherwise waste time on multiple identical solutions
+        */
+
+        let players_in_round = self.schedule[round as usize][table as usize];
+
+        PLAYER_MASK
+            & !self.played_in_round[round as usize]
+            & !self.played_on_table_total[table as usize]
+            & !self.removed[round as usize][table as usize]
+            & !self.players_played_with[players_in_round[0] as usize & 31]
+            & !self.players_played_with[players_in_round[1] as usize & 31]
+            & !self.players_played_with[players_in_round[2] as usize & 31]
+            & !self.players_played_with[players_in_round[3] as usize & 31]
+    }
+    pub const fn get_players_placed(&self) -> u16 {
+        self.players_placed
+    }
+    fn increment(&mut self) -> Result<(), ()> {
+        self.players_placed += 1;
+        self.player_number += 1;
+        if self.player_number >= PLAYERS_PER_TABLE {
+            if let Ok(table) = Table::try_from(self.table as usize + 1) {
+                self.table = table;
+            } else if let Ok(round) = Round::try_from(self.round as usize + 1) {
+                self.round = round;
+                self.table = Table::Zero;
+            } else {
+                return Err(());
+            }
+            self.player_number = 0;
+        }
+        Ok(())
+    }
+    fn decrement(&mut self) -> Result<(), ()> {
+        self.players_placed -= 1;
+        if self.player_number == 0 {
+            self.removed[self.round as usize][self.table as usize] = 0;
+            if let Ok(table) = Table::try_from((self.table as usize).wrapping_sub(1)) {
+                self.table = table;
+            } else if let Ok(round) = Round::try_from((self.round as usize).wrapping_sub(1)) {
+                self.round = round;
+                self.table = Table::Five;
+            } else {
+                return Err(());
+            }
+            self.player_number = PLAYERS_PER_TABLE - 1;
+        } else {
+            self.player_number -= 1
+        }
+        Ok(())
+    }
+    pub fn step(&mut self) -> Result<(), ()> {
+        self.increment()?;
+
+        let mut mask = self.get_mask(self.round, self.table);
+        while mask == 0 {
+            assert_eq!(self.last_player(), PLAYER_COUNT as u8);
+            
+            self.decrement()?;
+            assert_ne!(self.last_player(), PLAYER_COUNT as u8);
+            self.remove_last_player();
+            mask = self.get_mask(self.round, self.table);
+        }
+        let player = mask.trailing_zeros() as u8;
+        self.apply_player(player);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn init() {
+        let _ = env_logger::builder()
+            .filter_level(log::LevelFilter::Trace)
+            .is_test(true)
+            .try_init();
+    }
+
+    fn expand_bitvec(mut x: u32) -> Vec<u8> {
+        let mut out = Vec::new();
+        while x != 0 {
+            let zeros = x.trailing_zeros() as u8;
+            x ^= 1 << zeros;
+            out.push(zeros);
+        }
+
+        out
+    }
+
+    #[test]
+    fn test() {
+        let state = DF2::new();
+        let mask = expand_bitvec(state.get_mask(Round::One, Table::Zero));
+        assert_eq!(
+            mask,
+            vec![4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+        );
+    }
+    #[test]
+    fn test2() {
+        let state = DF2::from_slice(&[4, 8, 12, 16]).unwrap();
+        let mask = expand_bitvec(state.get_mask(Round::One, Table::One));
+        assert_eq!(
+            mask,
+            vec![0, 1, 2, 3, 9, 10, 11, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23]
+        );
+    }
+    #[test]
+    fn test3() {
+        let state = DF2::from_slice(&[4, 8, 12, 16, 0, 9, 13, 17]).unwrap();
+        let mask = expand_bitvec(state.get_mask(Round::One, Table::Two));
+        assert_eq!(mask, vec![1, 2, 3, 5, 6, 7, 14, 15, 18, 19, 20, 21, 22, 23]);
+    }
+    #[test]
+    fn test4() {
+        let state = DF2::from_slice(&[4, 8, 12, 16, 0, 9, 13, 17, 1, 5, 14, 18, 20]).unwrap();
+        let mask = expand_bitvec(state.get_mask(Round::One, Table::Two));
+        assert_eq!(mask, vec![21, 22, 23]);
+    }
+    #[test]
+    fn run_successful() {
+        init();
+        let mut state = DF2::from_slice(&[
+            4, 8, 12, 16, 0, 9, 13, 20, 1, 5, 17, 21, 2, 6, 18, 22, 3, 10, 14, 23, 7, 11, 15, 19,
+            5, 9, 14, 18, 3, 15, 16, 22, 2, 7, 12, 20, 1, 8, 19, 23, 6, 11, 13, 21, 0, 4, 10, 17,
+            6, 10, 19, 20, 2, 11, 14, 17, 4, 15, 18, 23, 0, 7, 16, 21, 1, 9, 12, 22, 3, 5, 8, 13,
+            7, 13, 17, 23, 10, 12, 18, 21, 0, 14, 19, 22, 3, 4, 11,
+        ])
+        .unwrap();
+        let mask = expand_bitvec(state.get_mask(state.round, state.table));
+        assert_eq!(mask, vec![9, 20]);
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct State {
     tables_to_explore: ToExplore,
@@ -98,7 +314,7 @@ impl std::fmt::Display for State {
 
 impl State {
     pub fn new() -> Self {
-        let potential_on_table = [[(1 << 24) - 1; TABLE_COUNT]; ROUND_COUNT];
+        let potential_on_table = [[PLAYER_MASK; TABLE_COUNT]; ROUND_COUNT];
         let mut state = Self {
             tables_to_explore: ToExplore::filled(),
             players_played_count: 0,
@@ -285,6 +501,7 @@ impl State {
         Ok(())
     }
 
+    #[inline(never)]
     pub fn step(&mut self, state2: &mut Self) -> Result<Option<()>, ()> {
         //self.find_hidden_singles()?;
 

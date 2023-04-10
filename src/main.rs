@@ -1,6 +1,8 @@
 use bincode::Options;
 use std::io::Read;
 use std::io::Write;
+
+use std::sync::Arc;
 fn step() {
     let mut freelist = Vec::<Box<boardgame_scheduler::State>>::new();
     let mut stack = vec![Box::new(boardgame_scheduler::State::new())];
@@ -55,6 +57,42 @@ fn step() {
 }
 
 fn bstep() -> Result<(), Box<dyn std::error::Error>> {
+    let tree = sled::open("db")?;
+
+    let state = boardgame_scheduler::State::new();
+    let available_count = state.get_available_count() as usize;
+
+    let mut states = Arc::new(Vec::new());
+    Arc::make_mut(&mut states).push(Arc::new(Vec::new()));
+    Arc::make_mut(Arc::make_mut(&mut states).first_mut().unwrap()).push(state);
+
+    loop {
+        let mut old_states = states.clone();
+
+        /*
+        Do stuff
+        */
+        let new_states = states.clone();
+        if let Some(old) = Arc::get_mut(&mut old_states) {
+            for (score, state_list) in old.iter_mut().enumerate() {
+                if let Some(state_list) = Arc::get_mut(state_list) {
+                    for state in state_list.iter() {
+                        //batch.remove()
+                    }
+                }
+            }
+        }
+
+        let mut batch = sled::Batch::default();
+
+        for result in tree.iter().rev() {
+            let (val, _) = result?;
+            batch.remove(val);
+        }
+
+        tree.apply_batch(batch)?;
+    }
+
     let max_cache = 100_000;
     let cache_diff_limit = 10;
 
@@ -63,10 +101,11 @@ fn bstep() -> Result<(), Box<dyn std::error::Error>> {
 
     let bincode_ops = bincode::DefaultOptions::new().with_fixint_encoding();
     let serialized_size = bincode_ops.serialized_size(&state)?;
+    println!("Serialized size: {}", serialized_size);
 
     let mut files = Vec::new();
     for i in 0..available_count + 1 {
-        let file = std::fs::File::create(format!("tmp{}.txt", i))?;
+        let file = std::fs::File::create(format!("tmp/tmp{}.txt", i))?;
         let buf = std::io::BufWriter::new(file);
         files.push((vec![], buf));
     }
@@ -82,7 +121,7 @@ fn bstep() -> Result<(), Box<dyn std::error::Error>> {
         println!("Current_count: {}", current_count);
         write_buf.flush()?;
         let mut file_buf =
-            if let Ok(file) = std::fs::File::open(format!("tmp{}.txt", current_count)) {
+            if let Ok(file) = std::fs::File::open(format!("tmp/tmp{}.txt", current_count)) {
                 let buf_read = std::io::BufReader::new(file);
                 Some(buf_read)
             } else {
@@ -166,6 +205,36 @@ fn bstep() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn df2() {
+    let mut state = boardgame_scheduler::DF2::new();
+
+    let start = std::time::Instant::now();
+    let mut n = 2;
+    let mut counter = 0;
+    let mut max_players_placed = 0;
+    loop {
+        let loop_start = std::time::Instant::now();
+        for _ in 0..n {
+            log::trace!("State: {:?}", state);
+            state.step().unwrap();
+            if state.get_players_placed() > max_players_placed {
+                max_players_placed = state.get_players_placed();
+            }
+        }
+        counter += n;
+        log::info!(
+            "Rate: {}, max_players_placed: {}",
+            counter as f32 / start.elapsed().as_secs_f32().max(0.1),
+            max_players_placed
+        );
+        n = (((n as f64) / loop_start.elapsed().as_secs_f64().max(0.1)) as u64).max(1000) / 2;
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    bstep()
+    let mut builder = env_logger::Builder::from_default_env();
+    builder.filter_level(log::LevelFilter::Info);
+    builder.init();
+    df2();
+    Ok(())
 }
