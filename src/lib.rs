@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use to_explore::ToExplore;
 
+use thiserror::Error;
+
 const ROUND_COUNT: usize = 6;
 const TABLE_COUNT: usize = 6;
 const PLAYERS_PER_TABLE: usize = 4;
@@ -78,6 +80,35 @@ impl TryFrom<usize> for Round {
     }
 }
 
+#[derive(Debug, Error)]
+#[error("Cannot backtrack any further")]
+pub struct ExceededMaxBacktrack{}
+
+#[derive(Debug, Error)]
+#[error("Finished - cannot progress any further")]
+pub struct FinishedStepping{}
+
+#[derive(Debug, Error)]
+pub enum StepError{
+    #[error(transparent)]
+    ExceededMaxBacktrack(#[from]ExceededMaxBacktrack),
+    #[error(transparent)]
+    FinishedStepping(#[from]FinishedStepping)
+}
+
+#[derive(Debug, Error)]
+#[error("Player is not placable")]
+pub struct PlayerNotPlacable {
+}
+
+#[derive(Debug, Error)]
+pub enum InitialisationError {
+    #[error(transparent)]
+    FinishedStepping(#[from]FinishedStepping),
+    #[error(transparent)]
+    PlayerNotPlacable(#[from] PlayerNotPlacable)
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct DF2 {
     players_placed: u16,
@@ -87,7 +118,6 @@ pub struct DF2 {
     played_in_round: [u32; ROUND_COUNT],
     played_on_table_total: [u32; TABLE_COUNT],
     schedule: [[[u8; 4]; TABLE_COUNT]; ROUND_COUNT],
-    removed: [[u32; TABLE_COUNT]; ROUND_COUNT],
     players_played_with: [u32; 32],
 }
 
@@ -101,7 +131,6 @@ impl DF2 {
             played_in_round: [0; ROUND_COUNT],
             played_on_table_total: [0; ROUND_COUNT],
             schedule: [[[PLAYER_COUNT as u8; 4]; ROUND_COUNT]; TABLE_COUNT],
-            removed: [[0; TABLE_COUNT]; ROUND_COUNT],
             players_played_with: [0; 32],
         };
         for player in 0..PLAYER_COUNT as u8 {
@@ -109,15 +138,16 @@ impl DF2 {
             new.increment().unwrap();
         }
         new.decrement().unwrap();
+        new.players_placed = 24;
 
         new
     }
-    pub fn from_slice(players: &[u8]) -> Result<Self, ()> {
+    pub fn from_slice(players: &[u8]) -> Result<Self, InitialisationError> {
         let mut df = Self::new();
         for player in players.iter() {
             df.increment()?;
             if df.get_mask(df.round, df.table) & (1 << player) == 0 {
-                return Err(());
+                Err(PlayerNotPlacable{})?;
             }
             df.apply_player(*player);
         }
@@ -141,9 +171,13 @@ impl DF2 {
     fn apply_player(&mut self, player: u8) {
         assert!(player < PLAYER_COUNT as u8);
         debug_assert_ne!(self.get_mask(self.round, self.table) & (1 << player), 0);
-        self.removed[self.round as usize][self.table as usize] |= 1 << player; // Only change that is not removed by remove_player
-        self.schedule[self.round as usize][self.table as usize][self.player_number as usize] = player as u8;
-        log::trace!("placing player {} into {:?}", player, self.schedule[self.round as usize][self.table as usize]);
+        self.schedule[self.round as usize][self.table as usize][self.player_number as usize] =
+            player as u8;
+        log::trace!(
+            "placing player {} into {:?}",
+            player,
+            self.schedule[self.round as usize][self.table as usize]
+        );
         self.toggle_player(player);
     }
     fn last_player(&self) -> u8 {
@@ -152,6 +186,11 @@ impl DF2 {
     fn remove_last_player(&mut self) {
         let player = self.last_player();
         assert!(player < PLAYER_COUNT as u8);
+        log::trace!(
+            "removing player {} from {:?}",
+            player,
+            self.schedule[self.round as usize][self.table as usize]
+        );
         self.schedule[self.round as usize][self.table as usize][self.player_number] =
             PLAYER_COUNT as u8;
         self.toggle_player(player);
@@ -166,7 +205,6 @@ impl DF2 {
         PLAYER_MASK
             & !self.played_in_round[round as usize]
             & !self.played_on_table_total[table as usize]
-            & !self.removed[round as usize][table as usize]
             & !self.players_played_with[players_in_round[0] as usize & 31]
             & !self.players_played_with[players_in_round[1] as usize & 31]
             & !self.players_played_with[players_in_round[2] as usize & 31]
@@ -175,7 +213,7 @@ impl DF2 {
     pub const fn get_players_placed(&self) -> u16 {
         self.players_placed
     }
-    fn increment(&mut self) -> Result<(), ()> {
+    fn increment(&mut self) -> Result<(), FinishedStepping> {
         self.players_placed += 1;
         self.player_number += 1;
         if self.player_number >= PLAYERS_PER_TABLE {
@@ -185,23 +223,23 @@ impl DF2 {
                 self.round = round;
                 self.table = Table::Zero;
             } else {
-                return Err(());
+                return Err(FinishedStepping {  });
             }
             self.player_number = 0;
         }
         Ok(())
     }
-    fn decrement(&mut self) -> Result<(), ()> {
+    fn decrement(&mut self) -> Result<(), ExceededMaxBacktrack> {
         self.players_placed -= 1;
         if self.player_number == 0 {
-            self.removed[self.round as usize][self.table as usize] = 0;
+            //self.removed[self.round as usize][self.table as usize] = 0;
             if let Ok(table) = Table::try_from((self.table as usize).wrapping_sub(1)) {
                 self.table = table;
             } else if let Ok(round) = Round::try_from((self.round as usize).wrapping_sub(1)) {
                 self.round = round;
                 self.table = Table::Five;
             } else {
-                return Err(());
+                return Err(ExceededMaxBacktrack{});
             }
             self.player_number = PLAYERS_PER_TABLE - 1;
         } else {
@@ -209,21 +247,27 @@ impl DF2 {
         }
         Ok(())
     }
-    pub fn step(&mut self) -> Result<(), ()> {
+    pub fn backtrack(&mut self) -> Result<(), ExceededMaxBacktrack> {
+        self.decrement()?;
+        assert_ne!(self.last_player(), PLAYER_COUNT as u8);
+        self.remove_last_player();
+        Ok(())
+    }
+    pub fn step(&mut self) -> Result<(), StepError> {
         self.increment()?;
 
         let mut mask = self.get_mask(self.round, self.table);
         while mask == 0 {
             assert_eq!(self.last_player(), PLAYER_COUNT as u8);
-            
-            self.decrement()?;
-            assert_ne!(self.last_player(), PLAYER_COUNT as u8);
-            self.remove_last_player();
+            self.backtrack()?;
             mask = self.get_mask(self.round, self.table);
         }
         let player = mask.trailing_zeros() as u8;
         self.apply_player(player);
         Ok(())
+    }
+    pub fn get_schedule(&self) -> [[[u8; 4]; TABLE_COUNT]; ROUND_COUNT] {
+        self.schedule
     }
 }
 
@@ -291,6 +335,34 @@ mod tests {
         .unwrap();
         let mask = expand_bitvec(state.get_mask(state.round, state.table));
         assert_eq!(mask, vec![9, 20]);
+    }
+    #[quickcheck_macros::quickcheck]
+    fn forwards_does_not_include_removed(steps: u16) {
+        let mut state = DF2::new();
+        for _ in 0..steps {
+            state.step().unwrap();
+        }
+        let last_player = state.last_player();
+        state.backtrack().unwrap();
+        let mask = state.get_mask(state.round, state.table);
+        assert_eq!(mask & (1 << last_player), 0);
+        assert_eq!(
+            mask & ((1 << last_player) - 1),
+            0,
+            "player: {} mask: {}, mask_expanded: {:?}",
+            last_player,
+            mask,
+            expand_bitvec(mask)
+        );
+    }
+    #[quickcheck_macros::quickcheck]
+    fn does_not_repeat(steps: u16) {
+        let mut state = DF2::new();
+        for _ in 0..steps {
+            let old_schedule = state.get_schedule();
+            state.step().unwrap();
+            assert_ne!(state.get_schedule(), old_schedule);
+        }
     }
 }
 
